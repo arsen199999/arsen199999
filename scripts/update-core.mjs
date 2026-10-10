@@ -4,7 +4,8 @@ import {
   readdirSync,
   statSync,
   cpSync,
-  renameSync,
+  copyFileSync,
+  lstatSync,
   rmSync,
   readFileSync,
   realpathSync,
@@ -20,7 +21,6 @@ export const appFiles = [
   'server',
   'scripts',
   'public',
-  'tests',
   '.gitignore',
   '.gitattributes',
   '.env.example',
@@ -87,6 +87,42 @@ export async function ensureStopped(port) {
     server.listen(port, '127.0.0.1', () => server.close(resolve));
   });
 }
+// Explorer and other Windows programs can hold a directory open even when its
+// files are writable. Keep existing directories in place and replace their
+// contents; never rename a live application directory into the backup folder.
+function replaceEntry(source, destination) {
+  const sourceInfo = lstatSync(source);
+  let destinationInfo;
+  try {
+    destinationInfo = lstatSync(destination);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (sourceInfo.isSymbolicLink()) {
+    if (destinationInfo) rmSync(destination, { recursive: true, force: true });
+    cpSync(source, destination, { verbatimSymlinks: true });
+  } else if (sourceInfo.isDirectory()) {
+    if (destinationInfo && (!destinationInfo.isDirectory() || destinationInfo.isSymbolicLink()))
+      rmSync(destination, { recursive: true, force: true });
+    mkdirSync(destination, { recursive: true });
+    const names = readdirSync(source);
+    for (const name of names) replaceEntry(join(source, name), join(destination, name));
+    const expected = new Set(names);
+    for (const name of readdirSync(destination)) {
+      if (!expected.has(name))
+        rmSync(join(destination, name), {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 100,
+        });
+    }
+  } else {
+    if (destinationInfo && (destinationInfo.isDirectory() || destinationInfo.isSymbolicLink()))
+      rmSync(destination, { recursive: true, force: true });
+    copyFileSync(source, destination);
+  }
+}
 export async function installPreparedUpdate(
   prepared,
   target,
@@ -122,26 +158,53 @@ export async function installPreparedUpdate(
     mode: 0o600,
   });
   if (existsSync(join(target, '.env'))) cpSync(join(target, '.env'), join(backupDir, '.env'));
-  const moved = [],
-    installed = [];
+  const entries = [...files, 'dist', 'node_modules'].filter((file) =>
+    existsSync(join(prepared, file)),
+  );
+  const originals = new Set();
+  const changed = [];
   mkdirSync(join(backupDir, 'code'));
+  // Finish every backup before changing any application file.
+  for (const file of entries) {
+    if (existsSync(join(target, file))) {
+      cpSync(join(target, file), join(backupDir, 'code', file), {
+        recursive: true,
+        verbatimSymlinks: true,
+      });
+      originals.add(file);
+    }
+  }
   try {
-    for (const file of [...files, 'dist', 'node_modules']) {
-      if (!existsSync(join(prepared, file))) continue;
+    for (const file of entries) {
       beforeMove(file);
-      if (existsSync(join(target, file))) {
-        renameSync(join(target, file), join(backupDir, 'code', file));
-        moved.push(file);
-      }
-      renameSync(join(prepared, file), join(target, file));
-      installed.push(file);
+      // Record before copying, so partial writes are also restored on failure.
+      changed.push(file);
+      replaceEntry(join(prepared, file), join(target, file));
     }
   } catch (error) {
-    for (const file of installed.reverse())
-      rmSync(join(target, file), { recursive: true, force: true });
-    for (const file of moved.reverse())
-      renameSync(join(backupDir, 'code', file), join(target, file));
-    throw new Error(`Обновление отменено, предыдущие файлы восстановлены: ${error.message}`);
+    const failed = [];
+    for (const file of changed.reverse()) {
+      try {
+        if (originals.has(file)) replaceEntry(join(backupDir, 'code', file), join(target, file));
+        else
+          rmSync(join(target, file), {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 100,
+          });
+      } catch {
+        failed.push(file);
+      }
+    }
+    const reason = ['EPERM', 'EACCES', 'EBUSY'].includes(error.code)
+      ? 'Windows не разрешила заменить файл. Закройте окна старой CRM и программы, использующие её файлы, затем повторите обновление.'
+      : error.message;
+    if (failed.length)
+      throw new Error(
+        `Обновление остановлено. Не удалось автоматически восстановить: ${failed.join(', ')}. Не запускайте CRM до восстановления. Резервная копия: ${backupDir}. ${reason}`,
+      );
+    throw new Error(`Обновление отменено, предыдущие файлы восстановлены. ${reason}`);
   }
   return backupDir;
 }

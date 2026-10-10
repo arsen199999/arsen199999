@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  statSync,
+  symlinkSync,
+  realpathSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -51,7 +61,11 @@ test('failed file replacement restores old code and leaves database untouched', 
       mkdirSync(root);
       writeFileSync(join(root, 'package.json'), root === old ? 'old' : 'new');
       writeFileSync(join(root, 'index.html'), root === old ? 'old-index' : 'new-index');
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'app.js'), root === old ? 'old-source' : 'new-source');
     }
+    writeFileSync(join(old, 'src', 'removed.js'), 'restore this');
+    writeFileSync(join(next, 'src', 'added.js'), 'new module');
     await assert.rejects(
       installPreparedUpdate(next, old, {
         beforeMove: (file) => {
@@ -62,8 +76,72 @@ test('failed file replacement restores old code and leaves database untouched', 
     );
     assert.equal(readFileSync(join(old, 'package.json'), 'utf8'), 'old');
     assert.equal(readFileSync(join(old, 'index.html'), 'utf8'), 'old-index');
+    assert.equal(readFileSync(join(old, 'src', 'app.js'), 'utf8'), 'old-source');
+    assert.equal(readFileSync(join(old, 'src', 'removed.js'), 'utf8'), 'restore this');
+    assert.equal(existsSync(join(old, 'src', 'added.js')), false);
     assert.equal(existsSync(join(old, 'data')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('update keeps application directories in place and leaves the tests folder untouched', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'linia-directory-lock-'));
+  const old = join(dir, 'old'),
+    next = join(dir, 'next');
+  try {
+    for (const root of [old, next]) {
+      mkdirSync(join(root, 'server'), { recursive: true });
+      mkdirSync(join(root, 'tests'));
+      writeFileSync(join(root, 'server', 'index.mjs'), root === old ? 'old' : 'new');
+      writeFileSync(
+        join(root, 'tests', 'existing.txt'),
+        root === old ? 'keep tests' : 'not installed',
+      );
+    }
+    writeFileSync(join(old, 'server', 'obsolete.mjs'), 'old module');
+    const inode = statSync(join(old, 'server')).ino;
+    const backup = await installPreparedUpdate(next, old, {
+      beforeMove: (file) => {
+        assert.notEqual(file, 'tests', 'updater must not touch the locked tests directory');
+      },
+    });
+    assert.equal(
+      statSync(join(old, 'server')).ino,
+      inode,
+      'existing server directory must not be renamed',
+    );
+    assert.equal(readFileSync(join(old, 'server', 'index.mjs'), 'utf8'), 'new');
+    assert.equal(existsSync(join(old, 'server', 'obsolete.mjs')), false);
+    assert.equal(readFileSync(join(old, 'tests', 'existing.txt'), 'utf8'), 'keep tests');
+    assert.equal(readFileSync(join(backup, 'code', 'server', 'index.mjs'), 'utf8'), 'old');
+    assert.equal(existsSync(join(backup, 'code', 'tests')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  'copied dependency links remain valid after the preparation folder is removed',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'linia-dependency-links-'));
+    const old = join(dir, 'old'),
+      next = join(dir, 'next');
+    try {
+      mkdirSync(old);
+      mkdirSync(join(next, 'node_modules', '.bin'), { recursive: true });
+      mkdirSync(join(next, 'node_modules', 'tool'));
+      writeFileSync(join(next, 'node_modules', 'tool', 'cli.js'), 'tool');
+      symlinkSync('../tool/cli.js', join(next, 'node_modules', '.bin', 'tool'));
+      await installPreparedUpdate(next, old);
+      rmSync(next, { recursive: true });
+      assert.equal(
+        realpathSync(join(old, 'node_modules', '.bin', 'tool')),
+        join(old, 'node_modules', 'tool', 'cli.js'),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
