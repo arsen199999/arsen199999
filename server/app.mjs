@@ -1,4 +1,6 @@
 import express from 'express';
+import { readReceipts, readSales, addSale } from './ledger.mjs';
+import { registerReports } from './report-routes.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -230,9 +232,24 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
             )
             .all(),
       plans: trainer ? [] : db.prepare('SELECT * FROM plans ORDER BY visits').all(),
-      payments: trainer
+      payments: trainer ? [] : readReceipts(db),
+      sales: trainer ? [] : readSales(db),
+      staff: trainer
         ? []
-        : db.prepare('SELECT * FROM payments ORDER BY date DESC, id DESC').all(),
+        : db.prepare("SELECT id,name,role FROM users WHERE role!='trainer' ORDER BY name").all(),
+      leads: trainer ? [] : db.prepare('SELECT * FROM leads ORDER BY date DESC,id DESC').all(),
+      funnels: trainer ? [] : db.prepare('SELECT * FROM funnels ORDER BY id').all(),
+      duties: trainer ? [] : db.prepare('SELECT * FROM duties ORDER BY date,start_time').all(),
+      tasks: trainer
+        ? db
+            .prepare(
+              "SELECT * FROM tasks WHERE manager_id=? AND status!='deleted' ORDER BY due_date,due_time",
+            )
+            .all(req.user.id)
+        : db
+            .prepare("SELECT * FROM tasks WHERE status!='deleted' ORDER BY due_date,due_time")
+            .all(),
+      stages: trainer ? [] : db.prepare('SELECT * FROM stages ORDER BY position,id').all(),
       users:
         req.user.role === 'owner'
           ? db.prepare('SELECT id, name, email, role, instructor_id FROM users ORDER BY id').all()
@@ -250,6 +267,15 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
     const birthday = optional(body.birthday, 10);
     if (birthday && (validDate(birthday) > today() || birthday < '1900-01-01'))
       fail('Укажите корректную дату рождения.');
+    const gender = body.gender || 'unknown';
+    if (!['female', 'male', 'unknown'].includes(gender))
+      fail('Укажите пол или выберите «Не указан».');
+    const managerId = body.manager_id ? integer(body.manager_id, 'Менеджер') : null;
+    if (
+      managerId &&
+      !db.prepare("SELECT 1 FROM users WHERE id=? AND role!='trainer'").get(managerId)
+    )
+      fail('Менеджер не найден.');
     return [
       name,
       phone,
@@ -257,6 +283,10 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
       birthday,
       optional(body.notes),
       optional(body.source, 60) || 'Студия',
+      gender,
+      optional(body.city, 100),
+      optional(body.tags, 200),
+      managerId,
     ];
   }
   app.post('/api/clients', office, (req, res) => {
@@ -265,7 +295,7 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
       fail('Клиент с таким телефоном уже есть в базе.', 409);
     const result = db
       .prepare(
-        'INSERT INTO clients(name, phone, email, birthday, notes, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO clients(name, phone, email, birthday, notes, source, gender, city, tags, manager_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(...values, today());
     res.status(201).json({ id: Number(result.lastInsertRowid) });
@@ -277,8 +307,19 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
     if (db.prepare('SELECT id FROM clients WHERE phone = ? AND id != ?').get(values[1], id))
       fail('Клиент с таким телефоном уже есть в базе.', 409);
     db.prepare(
-      'UPDATE clients SET name=?, phone=?, email=?, birthday=?, notes=?, source=? WHERE id=?',
+      'UPDATE clients SET name=?, phone=?, email=?, birthday=?, notes=?, source=?, gender=?, city=?, tags=?, manager_id=? WHERE id=?',
     ).run(...values, id);
+    res.json({ id });
+  });
+  app.patch('/api/clients/:id/archive', office, (req, res) => {
+    const id = integer(req.params.id, 'Клиент');
+    if (typeof req.body.archived !== 'boolean') fail('Некорректное значение архива.');
+    if (
+      !db
+        .prepare('UPDATE clients SET archived_at=? WHERE id=?')
+        .run(req.body.archived ? today() : null, id).changes
+    )
+      fail('Клиент не найден.', 404);
     res.json({ id });
   });
   app.post('/api/memberships', office, (req, res) => {
@@ -291,6 +332,7 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
     if (!plan) fail('Тариф не найден.', 404);
     const method = req.body.method;
     if (!['card', 'cash', 'transfer'].includes(method)) fail('Выберите способ оплаты.');
+    const paid = integer(req.body.paid_amount ?? plan.price, 'Полученная сумма', 0, plan.price);
     const start = validDate(req.body.start_date || today());
     if (start < today()) fail('Дата начала не может быть в прошлом.');
     const id = transaction(db, () => {
@@ -310,9 +352,17 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
             plan.price,
           ).lastInsertRowid,
       );
-      db.prepare(
-        'INSERT INTO payments(client_id, membership_id, amount, method, description, date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(clientId, id, plan.price, method, plan.name, today(), req.user.id);
+      addSale(db, {
+        clientId,
+        membershipId: id,
+        category: 'membership',
+        description: plan.name,
+        total: plan.price,
+        paid,
+        method,
+        date: today(),
+        userId: req.user.id,
+      });
       return id;
     });
     res.status(201).json({ id });
@@ -500,6 +550,7 @@ export function createApp(db, { staticDir = resolve('dist'), secureCookie = fals
     });
     res.json({ ok: true });
   });
+  registerReports(app, db, { office, fail, required, optional, integer, validDate });
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Метод не найден.' }));
   if (existsSync(staticDir)) {
     app.use(express.static(staticDir));

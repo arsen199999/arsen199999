@@ -30,7 +30,7 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(base);
   await page.getByRole('button', { name: 'Войти как владелец' }).click();
-  await page.getByRole('heading', { name: 'Обзор студии.' }).waitFor();
+  await page.getByRole('heading', { name: 'Рабочий стол', exact: true }).waitFor();
   await page.screenshot({
     path: 'test-results/dashboard-desktop.png',
     fullPage: true,
@@ -57,7 +57,7 @@ try {
   await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
   console.log('PASS: create client, sell membership, record payment.');
 
-  await page.getByRole('button', { name: /^Расписание/ }).click();
+  await page.getByRole('button', { name: /^График и расписание/ }).click();
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).first().click();
   dialog = page.getByRole('dialog');
   await dialog.getByLabel('Название занятия *').fill('Тестовая растяжка');
@@ -94,7 +94,7 @@ try {
   await page.getByRole('button', { name: 'Сохранить изменения' }).click();
   await page.getByRole('status').filter({ hasText: 'Настройки студии сохранены' }).waitFor();
   await page.reload();
-  await page.getByRole('heading', { name: 'Обзор студии.' }).waitFor();
+  await page.getByRole('heading', { name: 'Рабочий стол', exact: true }).waitFor();
   assert.equal(await page.locator('.studio-switch strong').textContent(), 'Линия тест');
   console.log('PASS: settings persisted after reload.');
 
@@ -120,7 +120,7 @@ try {
 
   await page.getByRole('button', { name: 'Выйти из аккаунта' }).click();
   await page.getByRole('button', { name: 'Войти как владелец' }).click();
-  await page.getByRole('heading', { name: 'Обзор студии.' }).waitFor();
+  await page.getByRole('heading', { name: 'Рабочий стол', exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
     path: 'test-results/dashboard-mobile.png',
@@ -130,8 +130,9 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.getByRole('button', { name: 'Открыть меню' }).click();
   await page.getByRole('button', { name: 'Клиенты', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Имя или телефон' }).fill('Тестовая Анастасия');
-  await page.getByRole('button', { name: /Тестовая Анастасия Студия/ }).click();
+  await page.getByRole('textbox', { name: 'Информация о клиенте' }).fill('Тестовая Анастасия');
+  await page.getByRole('button', { name: 'Применить', exact: true }).click();
+  await page.getByRole('button', { name: 'Тестовая Анастасия', exact: true }).click();
   await page.getByRole('dialog').getByText('Завершён', { exact: true }).waitFor();
   await page.screenshot({
     path: 'test-results/client-mobile.png',

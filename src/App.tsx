@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Bell,
+  ListChecks,
+  Tags,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -21,15 +23,22 @@ import {
 } from 'lucide-react';
 import Auth from './Auth';
 import Dashboard from './Dashboard';
+import Reports from './Reports';
+import ScheduleViews, { scheduleItems } from './ScheduleViews';
+import Leads from './Leads';
+import Tasks from './Tasks';
+import ClientDirectory from './ClientDirectory';
 import Modals from './Modals';
-import { Clients, Finance, Memberships, Schedule, Settings, Team } from './Pages';
+import { Clients, Finance, Memberships, Settings, Team } from './Pages';
 import { Avatar, Empty, Logo, ModalFrame } from './components';
 import { api, ApiError, dateLabel, roleLabel, shiftDate } from './lib';
-import type { Data, Modal, Page } from './types';
+import type { Data, Modal, Page, ScheduleView } from './types';
 
 const navigation = [
-  { id: 'dashboard', label: 'Обзор студии', icon: LayoutDashboard },
-  { id: 'schedule', label: 'Расписание', icon: CalendarDays },
+  { id: 'dashboard', label: 'Рабочий стол', icon: LayoutDashboard },
+  { id: 'leads', label: 'Заявки', icon: Tags },
+  { id: 'tasks', label: 'Задачи', icon: ListChecks },
+  { id: 'schedule', label: 'График и расписание', icon: CalendarDays },
   { id: 'clients', label: 'Клиенты', icon: Users },
   { id: 'memberships', label: 'Абонементы', icon: CreditCard },
   { id: 'finance', label: 'Финансы', icon: Wallet },
@@ -46,6 +55,8 @@ export default function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<Page>('dashboard');
+  const [scheduleView, setScheduleView] = useState<ScheduleView>('schedule');
+  const [scheduleMenu, setScheduleMenu] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState('');
   const [mobile, setMobile] = useState(false);
@@ -89,6 +100,7 @@ export default function App() {
   }, [toast]);
   function navigate(next: Page) {
     setPage(next);
+    if (next === 'schedule') setScheduleView('schedule');
     setMobile(false);
     setNotifications(false);
     setClientSearch('');
@@ -158,11 +170,35 @@ export default function App() {
   const alertCount = trainer ? pending.length : expiring.length;
   const content =
     page === 'dashboard' ? (
-      <Dashboard data={data} navigate={navigate} open={setModal} />
+      trainer ? (
+        <Dashboard data={data} navigate={navigate} open={setModal} />
+      ) : (
+        <Reports data={data} mutate={mutate} open={setModal} />
+      )
+    ) : page === 'leads' && !trainer ? (
+      <Leads data={data} mutate={mutate} open={setModal} />
+    ) : page === 'tasks' && !trainer ? (
+      <Tasks data={data} mutate={mutate} open={setModal} />
     ) : page === 'schedule' ? (
-      <Schedule data={data} open={setModal} />
+      <ScheduleViews
+        key={scheduleView}
+        view={scheduleView}
+        data={data}
+        open={setModal}
+        mutate={mutate}
+      />
     ) : page === 'clients' ? (
-      <Clients key={searchKey} data={data} open={setModal} initialSearch={clientSearch} />
+      trainer ? (
+        <Clients key={searchKey} data={data} open={setModal} initialSearch={clientSearch} />
+      ) : (
+        <ClientDirectory
+          key={searchKey}
+          data={data}
+          open={setModal}
+          mutate={mutate}
+          initialSearch={clientSearch}
+        />
+      )
     ) : page === 'memberships' && !trainer ? (
       <Memberships data={data} open={setModal} />
     ) : page === 'finance' && !trainer ? (
@@ -204,22 +240,65 @@ export default function App() {
           {navigation
             .filter((n) => !trainer || ['dashboard', 'schedule', 'clients'].includes(n.id))
             .map((n) => (
-              <button
+              <div
                 key={n.id}
-                className={page === n.id ? 'active' : ''}
-                onClick={() => navigate(n.id)}
+                className={`nav-item ${n.id === 'schedule' ? 'schedule-nav' : ''}`}
+                onMouseEnter={() => !mobile && n.id === 'schedule' && setScheduleMenu(true)}
+                onMouseLeave={() => !mobile && n.id === 'schedule' && setScheduleMenu(false)}
+                onBlur={(e) => {
+                  if (n.id === 'schedule' && !e.currentTarget.contains(e.relatedTarget))
+                    setScheduleMenu(false);
+                }}
               >
-                <n.icon size={19} strokeWidth={1.7} />
-                <span>{trainer && n.id === 'dashboard' ? 'Мой день' : n.label}</span>
-                {n.id === 'schedule' && (
-                  <b>
-                    {
-                      data.classes.filter((c) => c.date === data.today && c.status !== 'cancelled')
-                        .length
+                <button
+                  className={page === n.id ? 'active' : ''}
+                  aria-expanded={n.id === 'schedule' ? scheduleMenu : undefined}
+                  aria-controls={n.id === 'schedule' ? 'schedule-submenu' : undefined}
+                  onClick={() => {
+                    if (n.id === 'schedule' && mobile) {
+                      setScheduleMenu((v) => !v);
+                      return;
                     }
-                  </b>
+                    navigate(n.id);
+                    if (n.id === 'schedule') setScheduleMenu(true);
+                  }}
+                  onFocus={() => !mobile && n.id === 'schedule' && setScheduleMenu(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setScheduleMenu(false);
+                  }}
+                >
+                  <n.icon size={19} strokeWidth={1.7} />
+                  <span>{trainer && n.id === 'dashboard' ? 'Мой день' : n.label}</span>
+                  {n.id === 'schedule' && <ChevronRight size={14} />}
+                </button>
+                {n.id === 'schedule' && scheduleMenu && (
+                  <div
+                    id="schedule-submenu"
+                    className="schedule-submenu"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setScheduleMenu(false);
+                    }}
+                  >
+                    {scheduleItems
+                      .filter(
+                        (item) =>
+                          !trainer || ['schedule', 'instructors', 'bookings'].includes(item.id),
+                      )
+                      .map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            navigate('schedule');
+                            setScheduleView(item.id);
+                            setScheduleMenu(false);
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                  </div>
                 )}
-              </button>
+              </div>
             ))}
         </nav>
         <div className="sidebar-bottom">
@@ -271,7 +350,10 @@ export default function App() {
             <button
               className="icon-button menu-toggle"
               aria-label="Открыть меню"
-              onClick={() => setMobile(true)}
+              onClick={() => {
+                setScheduleMenu(false);
+                setMobile(true);
+              }}
             >
               <Menu size={22} />
             </button>

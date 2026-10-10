@@ -28,7 +28,7 @@ call npm ci --include=dev --no-audit --no-fund
 if errorlevel 1 goto failed
 
 :build
-if exist "dist\index.html" goto launch
+rem Rebuild after updates so an old interface cannot remain cached on disk.
 echo.
 echo  Готовим интерфейс CRM...
 call npm run build
@@ -37,7 +37,7 @@ if errorlevel 1 goto failed
 :launch
 echo.
 echo  Запускаем студию. Браузер откроется автоматически.
-node scripts\open-studio.mjs
+node --env-file-if-exists=.env scripts\open-studio.mjs
 if errorlevel 1 goto failed
 exit /b 0
 

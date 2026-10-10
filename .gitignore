@@ -5,3 +5,6 @@ data/
 *.tsbuildinfo
 test-results/
 *.log
+
+update-backups/
+.linia-update-*/

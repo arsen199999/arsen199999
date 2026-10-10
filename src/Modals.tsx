@@ -134,9 +134,38 @@ export default function Modals({ modal, data, close, open, mutate }: Props) {
               />
             </Field>
             <Field label="Как узнали о нас">
-              <select name="source" defaultValue={client?.source || 'Студия'}>
-                {['Студия', 'Рекомендация', 'Соцсети', 'Сайт', 'Другое'].map((s) => (
+              <input
+                name="source"
+                defaultValue={client?.source || 'Студия'}
+                maxLength={60}
+                list="client-sources"
+              />
+              <datalist id="client-sources">
+                {['Студия', 'Рекомендация', 'ВКонтакте', 'Сайт', 'Яндекс Директ'].map((s) => (
                   <option key={s}>{s}</option>
+                ))}
+              </datalist>
+            </Field>
+            <Field label="Пол">
+              <select name="gender" defaultValue={client?.gender || 'unknown'}>
+                <option value="unknown">Не указан</option>
+                <option value="female">Женский</option>
+                <option value="male">Мужской</option>
+              </select>
+            </Field>
+            <Field label="Город">
+              <input name="city" defaultValue={client?.city} maxLength={100} />
+            </Field>
+            <Field label="Теги">
+              <input name="tags" defaultValue={client?.tags} maxLength={200} />
+            </Field>
+            <Field label="Менеджер">
+              <select name="manager_id" defaultValue={client?.manager_id || ''}>
+                <option value="">Не назначен</option>
+                {data.staff.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
                 ))}
               </select>
             </Field>
@@ -224,6 +253,17 @@ export default function Modals({ modal, data, close, open, mutate }: Props) {
               </select>
             </Field>
           </div>
+          <Field label="Получено, ₽">
+            <input
+              key={selectedPlan}
+              name="paid_amount"
+              type="number"
+              min="0"
+              max={plan?.price}
+              defaultValue={plan?.price}
+              required
+            />
+          </Field>
           {plan && (
             <div className={`sale-summary ${plan.color}`}>
               <CreditCard size={25} />
@@ -237,8 +277,8 @@ export default function Modals({ modal, data, close, open, mutate }: Props) {
             </div>
           )}
           <p className="form-hint">
-            Подтвердите только после получения денег. Оплата появится в журнале финансов, абонемент
-            — в карточке клиента.
+            Укажите фактически полученную сумму. Неоплаченный остаток попадёт в задолженности на
+            рабочем столе.
           </p>
           {errorMessage}
           <div className="form-footer">

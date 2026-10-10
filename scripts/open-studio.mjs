@@ -10,7 +10,7 @@ const server = fork(fileURLToPath(new URL('../server/index.mjs', import.meta.url
   stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
 });
 
-server.on('message', message => {
+server.on('message', (message) => {
   if (message?.type !== 'ready') return;
   const port = Number(message.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
@@ -20,21 +20,26 @@ server.on('message', message => {
   let opener;
   if (process.platform === 'win32') {
     opener = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', address], {
-      stdio: 'ignore', windowsHide: true,
+      stdio: 'ignore',
+      windowsHide: true,
     });
   } else if (process.platform === 'darwin') {
     opener = spawn('open', [address], { stdio: 'ignore' });
   } else {
     opener = spawn('xdg-open', [address], { stdio: 'ignore' });
   }
-  opener.on('error', () => console.log(`Откройте браузер на этом компьютере и введите адрес: ${address}`));
+  opener.on('error', () =>
+    console.log(`Откройте браузер на этом компьютере и введите адрес: ${address}`),
+  );
   opener.unref();
 });
 
-server.on('error', error => {
+server.on('error', (error) => {
   console.error('Не удалось запустить CRM:', error.message);
   process.exitCode = 1;
 });
-server.on('exit', code => { process.exitCode = code ?? 0; });
+server.on('exit', (code) => {
+  process.exitCode = code ?? 0;
+});
 process.on('SIGINT', () => server.kill('SIGINT'));
 process.on('SIGTERM', () => server.kill('SIGTERM'));

@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { migrateAnalytics } from './ledger.mjs';
 
 export const today = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
@@ -84,7 +85,10 @@ export function openDatabase(filename, demo = true) {
     CREATE INDEX IF NOT EXISTS bookings_membership ON bookings(membership_id, status);
     CREATE INDEX IF NOT EXISTS payments_date ON payments(date);
   `);
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'initialized'").get()) {
+  const wasInitialized = Boolean(
+    db.prepare("SELECT 1 FROM settings WHERE key = 'initialized'").get(),
+  );
+  if (!wasInitialized) {
     transaction(db, () => {
       const insert = db.prepare('INSERT INTO settings(key, value) VALUES (?, ?)');
       for (const [key, value] of Object.entries({
@@ -106,6 +110,20 @@ export function openDatabase(filename, demo = true) {
       plan.run('Больше движения', 12, 45, 9600, 'pink');
       if (demo) seedDemo(db);
     });
+  }
+  if (!db.prepare("SELECT 1 FROM settings WHERE key='analytics_schema'").get()) {
+    if (wasInitialized && filename !== ':memory:') {
+      const backupDir = join(dirname(resolve(filename)), 'backups');
+      mkdirSync(backupDir, { recursive: true });
+      const backup = join(
+        backupDir,
+        `before-analytics-${Date.now()}-${randomBytes(3).toString('hex')}.sqlite`,
+      );
+      db.prepare('VACUUM INTO ?').run(backup);
+      chmodSync(backup, 0o600);
+      console.log('Создана резервная копия базы перед обновлением аналитики:', backup);
+    }
+    transaction(db, () => migrateAnalytics(db));
   }
   return db;
 }
